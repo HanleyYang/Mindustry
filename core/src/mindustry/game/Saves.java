@@ -69,7 +69,7 @@ public class Saves{
 
     public void load(){
         saves.clear();
-        if (Core.settings.getBool("saveCloudSync", false) && Core.settings.getString("saveCloudSyncToken") != null) {
+        if (Core.settings.getString("saveCloudSyncToken") != null) {
             DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
             try {
                 client.files().getMetadata(cloudRootPath);
@@ -217,7 +217,7 @@ public class Saves{
         sector.save.setAutosave(true);
         sector.save.save();
         lastSectorSave = sector.save;
-        if (Core.settings.getBool("saveCloudSync", false) && Core.settings.getString("saveCloudSyncToken") != null) {
+        if (Core.settings.getString("saveCloudSyncToken") != null) {
             InputStream localInput = sector.save.file.read();
             try {
                 DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
