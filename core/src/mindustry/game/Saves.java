@@ -1,27 +1,50 @@
 package mindustry.game;
 
-import arc.*;
-import arc.assets.*;
-import arc.files.*;
-import arc.graphics.*;
-import arc.struct.*;
-import arc.util.*;
-import arc.util.async.*;
-import mindustry.*;
-import mindustry.core.GameState.*;
-import mindustry.game.EventType.*;
-import mindustry.io.*;
-import mindustry.io.SaveIO.*;
+import arc.Core;
+import arc.Events;
+import arc.assets.AssetDescriptor;
+import arc.files.Fi;
+import arc.graphics.Texture;
+import arc.struct.Seq;
+import arc.util.Log;
+import arc.util.Nullable;
+import arc.util.Strings;
+import arc.util.Time;
+import arc.util.async.AsyncExecutor;
+import com.dropbox.core.DbxException;
+import com.dropbox.core.DbxRequestConfig;
+import com.dropbox.core.util.IOUtil;
+import com.dropbox.core.util.StringUtil;
+import com.dropbox.core.v2.DbxClientV2;
+import com.dropbox.core.v2.files.FileMetadata;
+import com.dropbox.core.v2.files.ListFolderResult;
+import com.dropbox.core.v2.files.Metadata;
+import mindustry.Vars;
+import mindustry.core.GameState.State;
+import mindustry.game.EventType.StateChangeEvent;
+import mindustry.io.SaveIO;
+import mindustry.io.SaveIO.SaveException;
+import mindustry.io.SaveMeta;
+import mindustry.io.SavePreviewLoader;
 import mindustry.maps.Map;
-import mindustry.type.*;
+import mindustry.type.Sector;
 
-import java.io.*;
-import java.text.*;
-import java.util.*;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
 
 import static mindustry.Vars.*;
 
 public class Saves{
+
+    /** For dropbox save*/
+    private static final DbxRequestConfig config = DbxRequestConfig.newBuilder("smart-home").build();
+    public static final String cloudRootPath = "/mindustry";
+    public static final String cloudSavePrefix = "cloud_save_";
+
     Seq<SaveSlot> saves = new Seq<>();
     @Nullable SaveSlot current;
     private @Nullable SaveSlot lastSectorSave;
@@ -46,6 +69,70 @@ public class Saves{
 
     public void load(){
         saves.clear();
+        if (Core.settings.getBool("saveCloudSync", false) && Core.settings.getString("saveCloudSyncToken") != null) {
+            DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
+            try {
+                client.files().getMetadata(cloudRootPath);
+            } catch (DbxException e) {
+                // root not exist
+                try {
+                    client.files().createFolderV2(cloudRootPath);
+                } catch (DbxException dbxException) {
+                    throw new RuntimeException(dbxException.getMessage(), dbxException);
+                }
+            }
+            //dropbpx save sync
+            OutputStream localOutput = null;
+            InputStream localInput = null;
+            try {
+                ListFolderResult result = client.files().listFolder(cloudRootPath);
+                HashMap<String, FileMetadata> cloudSaveFiles = new HashMap<>();
+                for (Metadata metadata : result.getEntries()) {
+                    if (metadata instanceof FileMetadata && metadata.getName().startsWith(cloudSavePrefix)) {
+                        cloudSaveFiles.put(metadata.getName().substring(cloudSavePrefix.length()),
+                                ((FileMetadata) metadata));
+                    }
+                }
+
+                for(Fi file : saveDirectory.list()){
+                    if(!file.name().contains("backup") && SaveIO.isSaveValid(file)){
+                        if (cloudSaveFiles.containsKey(file.name())) {
+                            FileMetadata metadata = cloudSaveFiles.remove(file.name());
+                            long localTs = file.lastModified();
+                            long cloudTs = metadata.getClientModified().getTime();
+                            if (localTs == cloudTs) continue;
+                            if (cloudTs > localTs) {
+                                localOutput = file.write();
+                                client.files().downloadBuilder(cloudRootPath + "/" + metadata.getName())
+                                        .download(localOutput);
+                            }
+                        }
+                        // cloud not exist or out of date
+                        localInput = file.read();
+                        client.files().uploadBuilder(cloudRootPath + "/" + cloudSavePrefix + file.name())
+                                .uploadAndFinish(localInput);
+
+                    }
+                }
+                // local not exist
+                cloudSaveFiles.forEach((s, metadata) -> {
+                    OutputStream localOutput1 = saveDirectory.child(s).write();
+                    try {
+                        client.files().downloadBuilder(cloudRootPath + "/" + metadata.getName())
+                                .download(localOutput1);
+                    } catch (DbxException | IOException e) {
+                        throw new RuntimeException(e.getMessage(), e);
+                    } finally {
+                        IOUtil.closeQuietly(localOutput1);
+                    }
+                });
+            } catch (DbxException | IOException e) {
+                throw new RuntimeException(e.getMessage(), e);
+            } finally {
+                IOUtil.closeQuietly(localOutput);
+                IOUtil.closeQuietly(localInput);
+            }
+        }
 
         for(Fi file : saveDirectory.list()){
             if(!file.name().contains("backup") && SaveIO.isSaveValid(file)){
@@ -78,7 +165,7 @@ public class Saves{
 
     public void update(){
         if(current != null && state.isGame()
-        && !(state.isPaused() && Core.scene.hasDialog())){
+                && !(state.isPaused() && Core.scene.hasDialog())){
             if(lastTimestamp != 0){
                 totalPlaytime += Time.timeSinceMillis(lastTimestamp);
             }
@@ -130,6 +217,18 @@ public class Saves{
         sector.save.setAutosave(true);
         sector.save.save();
         lastSectorSave = sector.save;
+        if (Core.settings.getBool("saveCloudSync", false) && Core.settings.getString("saveCloudSyncToken") != null) {
+            InputStream localInput = sector.save.file.read();
+            try {
+                DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
+                client.files().uploadBuilder(cloudRootPath + "/" + cloudSavePrefix + sector.save.file.name())
+                        .uploadAndFinish(localInput);
+            } catch (DbxException | IOException e) {
+                throw new RuntimeException(e.getMessage(), e);
+            } finally {
+                IOUtil.closeQuietly(localInput);
+            }
+        }
         Core.settings.put("last-sector-save", sector.save.getName());
     }
 

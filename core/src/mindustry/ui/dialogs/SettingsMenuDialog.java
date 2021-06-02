@@ -294,6 +294,12 @@ public class SettingsMenuDialog extends SettingsDialog{
         sound.sliderPref("ambientvol", bundle.get("setting.ambientvol.name", "Ambient Volume"), 100, 0, 100, 1, i -> i + "%");
 
         game.screenshakePref();
+        game.checkPref("saveCloudSync", bundle.get("setting.savecloudsync.name", "Save Cloud Sync"),false);
+        if (Core.settings.getBool("saveCloudSync", false)) {
+            TextField field = game.field(Core.settings.getString("saveCloudSyncToken"), text -> {
+                Core.settings.put("saveCloudSyncToken", text);
+            }).size(320f, 54f).maxTextLength(512).addInputDialog().get();
+        }
         if(mobile){
             game.checkPref("autotarget", true);
             game.checkPref("keyboard", false, val -> control.setInput(val ? new DesktopInput() : new MobileInput()));
@@ -328,7 +334,7 @@ public class SettingsMenuDialog extends SettingsDialog{
         }
 
         game.checkPref("doubletapmine", false);
-      
+
         if(!ios){
             game.checkPref("modcrashdisable", true);
         }
@@ -417,7 +423,7 @@ public class SettingsMenuDialog extends SettingsDialog{
         }
 
         //if(!ios){
-            graphics.checkPref("bloom", true, val -> renderer.toggleBloom(val));
+        graphics.checkPref("bloom", true, val -> renderer.toggleBloom(val));
         //}else{
         //    Core.settings.put("bloom", false);
         //}
