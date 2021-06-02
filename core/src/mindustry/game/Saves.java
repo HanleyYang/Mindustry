@@ -14,7 +14,6 @@ import arc.util.async.AsyncExecutor;
 import com.dropbox.core.DbxException;
 import com.dropbox.core.DbxRequestConfig;
 import com.dropbox.core.util.IOUtil;
-import com.dropbox.core.util.StringUtil;
 import com.dropbox.core.v2.DbxClientV2;
 import com.dropbox.core.v2.files.FileMetadata;
 import com.dropbox.core.v2.files.ListFolderResult;
@@ -105,9 +104,12 @@ public class Saves{
                                 localOutput = file.write();
                                 client.files().downloadBuilder(cloudRootPath + "/" + metadata.getName())
                                         .download(localOutput);
+                            } else {
+                                // cloud out of date
+                                client.files().deleteV2(cloudRootPath + "/" + metadata.getName());
                             }
                         }
-                        // cloud not exist or out of date
+                        // cloud not exist or cloud out of date
                         localInput = file.read();
                         client.files().uploadBuilder(cloudRootPath + "/" + cloudSavePrefix + file.name())
                                 .uploadAndFinish(localInput);
@@ -217,18 +219,6 @@ public class Saves{
         sector.save.setAutosave(true);
         sector.save.save();
         lastSectorSave = sector.save;
-        if (Core.settings.getString("saveCloudSyncToken") != null) {
-            InputStream localInput = sector.save.file.read();
-            try {
-                DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
-                client.files().uploadBuilder(cloudRootPath + "/" + cloudSavePrefix + sector.save.file.name())
-                        .uploadAndFinish(localInput);
-            } catch (DbxException | IOException e) {
-                throw new RuntimeException(e.getMessage(), e);
-            } finally {
-                IOUtil.closeQuietly(localInput);
-            }
-        }
         Core.settings.put("last-sector-save", sector.save.getName());
     }
 
@@ -305,6 +295,21 @@ public class Saves{
 
             totalPlaytime = prev;
             savePreview();
+            if (Core.settings.getString("saveCloudSyncToken") != null) {
+                InputStream localInput = file.read();
+                DbxClientV2 client = new DbxClientV2(config, Core.settings.getString("saveCloudSyncToken"));
+                try {
+                    client.files().deleteV2(cloudRootPath + "/" + cloudSavePrefix + file.name());
+                }catch (Exception ignore){}
+                try {
+                    client.files().uploadBuilder(cloudRootPath + "/" + cloudSavePrefix + file.name())
+                            .uploadAndFinish(localInput);
+                } catch (DbxException | IOException e) {
+                    throw new RuntimeException(e.getMessage(), e);
+                } finally {
+                    IOUtil.closeQuietly(localInput);
+                }
+            }
         }
 
         private void savePreview(){
